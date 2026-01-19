@@ -48,5 +48,56 @@
     }
     return out;
   };
-})();
 
+  ns.nowMs = function nowMs() {
+    try {
+      if (typeof performance !== "undefined" && typeof performance.now === "function") return performance.now();
+    } catch {}
+    return Date.now();
+  };
+
+  ns.debugLog = function debugLog(message, meta) {
+    try {
+      const prefix = "[byok.webview]";
+      if (meta && typeof meta === "object") console.log(prefix, String(message || ""), meta);
+      else console.log(prefix, String(message || ""), meta ?? "");
+    } catch {}
+  };
+
+  ns.withTiming = function withTiming(label, fn, opts) {
+    const o = opts && typeof opts === "object" ? opts : {};
+    const thresholdMs = Number.isFinite(Number(o.thresholdMs)) ? Number(o.thresholdMs) : 0;
+    const startedAt = ns.nowMs();
+    try {
+      const out = fn();
+      if (out && typeof out.then === "function") {
+        return out.then(
+          (res) => {
+            const ms = ns.nowMs() - startedAt;
+            if (ms >= thresholdMs) ns.debugLog(label, { ms: Math.round(ms) });
+            return res;
+          },
+          (err) => {
+            const ms = ns.nowMs() - startedAt;
+            ns.debugLog(`${label} FAIL`, { ms: Math.round(ms), err: err instanceof Error ? err.message : String(err) });
+            throw err;
+          }
+        );
+      }
+      const ms = ns.nowMs() - startedAt;
+      if (ms >= thresholdMs) ns.debugLog(label, { ms: Math.round(ms) });
+      return out;
+    } catch (err) {
+      const ms = ns.nowMs() - startedAt;
+      ns.debugLog(`${label} FAIL`, { ms: Math.round(ms), err: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
+  };
+
+  let __reqSeq = 0;
+  ns.newRequestId = function newRequestId(prefix) {
+    __reqSeq += 1;
+    const p = ns.normalizeStr(prefix) || "req";
+    return `${p}_${Date.now().toString(36)}_${__reqSeq.toString(36)}`;
+  };
+})();

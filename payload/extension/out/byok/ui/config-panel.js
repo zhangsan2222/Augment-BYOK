@@ -1,6 +1,6 @@
 "use strict";
 
-const { info, warn } = require("../infra/log");
+const { debug, info, warn } = require("../infra/log");
 const { normalizeString, normalizeRawToken } = require("../infra/util");
 const { defaultConfig } = require("../config/config");
 const { setRuntimeEnabled: setRuntimeEnabledPersisted } = require("../config/state");
@@ -143,16 +143,20 @@ function createHandlers({ vscode, ctx, cfgMgr, state, panel }) {
     fetchProviderModels: async (msg) => {
       const idx = Number(msg?.idx);
       const provider = msg?.provider;
+      const requestId = normalizeString(msg?.requestId);
+      if (requestId) debug("panel fetchProviderModels", { idx, requestId });
       try {
         const models = await fetchProviderModels({ provider, timeoutMs: 15000 });
-        post(panel, { type: "providerModelsFetched", idx, models });
+        if (requestId) debug("panel fetchProviderModels OK", { idx, requestId, modelsCount: Array.isArray(models) ? models.length : 0 });
+        post(panel, { type: "providerModelsFetched", idx, models, ...(requestId ? { requestId } : {}) });
       } catch (err) {
         const m = err instanceof Error ? err.message : String(err);
-        warn("fetchProviderModels failed:", m);
-        post(panel, { type: "providerModelsFailed", idx, error: `Fetch models failed: ${m}` });
+        warn("fetchProviderModels failed:", requestId ? { idx, requestId, error: m } : m);
+        post(panel, { type: "providerModelsFailed", idx, ...(requestId ? { requestId } : {}), error: `Fetch models failed: ${m}` });
       }
     },
     testOfficialGetModels: async (msg) => {
+      const requestId = normalizeString(msg?.requestId);
       const cfg = msg && typeof msg === "object" && msg.config && typeof msg.config === "object" ? msg.config : cfgMgr.get();
       const off = cfg?.official && typeof cfg.official === "object" ? cfg.official : {};
       const completionUrl = normalizeString(off.completionUrl) || "https://api.augmentcode.com/";
@@ -160,7 +164,7 @@ function createHandlers({ vscode, ctx, cfgMgr, state, panel }) {
 
       const url = joinBaseUrl(completionUrl, "get-models");
       if (!url) {
-        post(panel, { type: "officialGetModelsFailed", error: "Official /get-models failed: completion_url 无效（无法拼接 get-models）" });
+        post(panel, { type: "officialGetModelsFailed", ...(requestId ? { requestId } : {}), error: "Official /get-models failed: completion_url 无效（无法拼接 get-models）" });
         return;
       }
 
@@ -179,17 +183,21 @@ function createHandlers({ vscode, ctx, cfgMgr, state, panel }) {
         const featureFlagsCount =
           json.feature_flags && typeof json.feature_flags === "object" && !Array.isArray(json.feature_flags) ? Object.keys(json.feature_flags).length : 0;
 
+        const elapsedMs = Date.now() - startedAtMs;
+        if (requestId) debug("panel testOfficialGetModels OK", { requestId, modelsCount, featureFlagsCount, elapsedMs });
+
         post(panel, {
           type: "officialGetModelsOk",
+          ...(requestId ? { requestId } : {}),
           modelsCount,
           defaultModel,
           featureFlagsCount,
-          elapsedMs: Date.now() - startedAtMs
+          elapsedMs
         });
       } catch (err) {
         const m = err instanceof Error ? err.message : String(err);
-        warn("testOfficialGetModels failed:", m);
-        post(panel, { type: "officialGetModelsFailed", error: `Official /get-models failed: ${m}` });
+        warn("testOfficialGetModels failed:", requestId ? { requestId, error: m } : m);
+        post(panel, { type: "officialGetModelsFailed", ...(requestId ? { requestId } : {}), error: `Official /get-models failed: ${m}` });
       }
     },
     cancelSelfTest: async () => {
@@ -207,12 +215,14 @@ function createHandlers({ vscode, ctx, cfgMgr, state, panel }) {
         postStatus(panel, "Self Test already running.");
         return;
       }
+      const requestId = normalizeString(msg?.requestId);
       const cfg = msg && typeof msg === "object" && msg.config && typeof msg.config === "object" ? msg.config : cfgMgr.get();
       const timeoutMs = DEFAULT_UPSTREAM_TIMEOUT_MS;
 
       selfTestRunning = true;
       selfTestController = new AbortController();
-      post(panel, { type: "selfTestStarted", startedAtMs: Date.now() });
+      if (requestId) debug("panel runSelfTest", { requestId });
+      post(panel, { type: "selfTestStarted", ...(requestId ? { requestId } : {}), startedAtMs: Date.now() });
       postStatus(panel, "Self Test started...");
 
       try {
@@ -222,20 +232,20 @@ function createHandlers({ vscode, ctx, cfgMgr, state, panel }) {
           abortSignal: selfTestController.signal,
           onEvent: (ev) => {
             const t = normalizeString(ev?.type);
-            if (t === "log") post(panel, { type: "selfTestLog", line: String(ev?.line || "") });
-            else if (t === "done") post(panel, { type: "selfTestDone", report: ev?.report || null });
+            if (t === "log") post(panel, { type: "selfTestLog", ...(requestId ? { requestId } : {}), line: String(ev?.line || "") });
+            else if (t === "done") post(panel, { type: "selfTestDone", ...(requestId ? { requestId } : {}), report: ev?.report || null });
           }
         });
         postStatus(panel, "Self Test finished.");
       } catch (err) {
         if (err && typeof err === "object" && err.name === "AbortError") {
-          post(panel, { type: "selfTestCanceled" });
+          post(panel, { type: "selfTestCanceled", ...(requestId ? { requestId } : {}) });
           postStatus(panel, "Self Test canceled.");
           return;
         }
         const m = err instanceof Error ? err.message : String(err);
-        warn("selfTest failed:", m);
-        post(panel, { type: "selfTestFailed", error: m });
+        warn("selfTest failed:", requestId ? { requestId, error: m } : m);
+        post(panel, { type: "selfTestFailed", ...(requestId ? { requestId } : {}), error: m });
         postStatus(panel, `Self Test failed: ${m}`);
       } finally {
         selfTestRunning = false;

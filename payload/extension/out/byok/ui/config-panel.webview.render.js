@@ -240,6 +240,91 @@
     return lines.join("");
   };
 
+  function computeOfficialTestUi(officialTest) {
+    const ot = officialTest && typeof officialTest === "object" ? officialTest : {};
+    const running = ot.running === true;
+    const ok = ot.ok === true ? true : ot.ok === false ? false : null;
+    const text = normalizeStr(ot.text);
+    const textShort = text.length > 140 ? text.slice(0, 140) + "…" : text;
+    const badgeHtml = running
+      ? `<span class="status-badge status-badge--warning">testing</span>`
+      : ok === true
+        ? `<span class="status-badge status-badge--success">ok</span>`
+        : ok === false
+          ? `<span class="status-badge status-badge--error">failed</span>`
+          : "";
+    const textHtml = textShort
+      ? `<span class="text-muted text-mono text-xs inline-ellipsis"${text !== textShort ? ` title="${escapeHtml(text)}"` : ""}>${escapeHtml(textShort)}</span>`
+      : "";
+    return { running, ok, text, textShort, badgeHtml, textHtml };
+  }
+
+  function summarizeSelfTestReportHtml(stReport) {
+    if (!stReport) return "";
+    const ps = Array.isArray(stReport.providers) ? stReport.providers : [];
+    const total = ps.length;
+    const failed = ps.filter((p) => p && p.ok === false).length;
+    const globals = stReport.global && typeof stReport.global === "object" ? stReport.global : {};
+    const gTests = Array.isArray(globals.tests) ? globals.tests : [];
+    const gFailed = gTests.filter((x) => x && x.ok === false).length;
+    const toolExec = globals.toolExec && typeof globals.toolExec === "object" ? globals.toolExec : null;
+    const toolExecBadge =
+      toolExec && toolExec.ok === true ? `<span class="badge">ok</span>` : toolExec && toolExec.ok === false ? `<span class="badge">failed</span>` : "";
+    const failedTools = toolExec && Array.isArray(toolExec.failedTools) ? toolExec.failedTools : [];
+    const failedToolsText = failedTools.length ? `${failedTools.join(",")}${toolExec && toolExec.failedToolsTruncated ? ",…" : ""}` : "";
+    const badge = stReport.ok === true ? `<span class="badge">ok</span>` : `<span class="badge">failed</span>`;
+    return (
+      `<div class="small">result: ${badge} providers_failed=${failed}/${total} global_failed=${gFailed}/${gTests.length}</div>` +
+      (toolExec ? `<div class="small">toolsExec: ${toolExecBadge} ${escapeHtml(String(toolExec.detail || ""))}</div>` : "") +
+      (failedToolsText ? `<div class="small mono">failed_tools: ${escapeHtml(failedToolsText)}</div>` : "")
+    );
+  }
+
+  function computeThinkingUi({ type, requestDefaults }) {
+    const rd = requestDefaults && typeof requestDefaults === "object" && !Array.isArray(requestDefaults) ? requestDefaults : {};
+
+    if (type === "openai_responses") {
+      const uiThinkingLevel = normalizeStr(rd.__byok_thinking_level);
+      const reasoning = rd.reasoning && typeof rd.reasoning === "object" && !Array.isArray(rd.reasoning) ? rd.reasoning : {};
+      const raw = normalizeStr(reasoning.effort);
+      const rawNorm = raw.replace(/[\s-]+/g, "_");
+      const v =
+        rawNorm === "extra_high"
+          ? "extra"
+          : rawNorm === "high" && uiThinkingLevel === "extra"
+            ? "extra"
+            : rawNorm === "low" || rawNorm === "medium" || rawNorm === "high"
+              ? rawNorm
+              : rawNorm
+                ? "custom"
+                : "";
+      const hint =
+        v === "extra"
+          ? "OpenAI Responses：reasoning.effort=extra_high（注意：Extra high 可能更快消耗速率/额度）"
+          : "OpenAI Responses：reasoning.effort=low|medium|high|extra_high";
+      return { supported: true, value: v, hint };
+    }
+
+    if (type === "anthropic") {
+      const thinking = rd.thinking && typeof rd.thinking === "object" && !Array.isArray(rd.thinking) ? rd.thinking : null;
+      const tType = normalizeStr(thinking && thinking.type);
+      const btRaw = thinking ? (thinking.budget_tokens ?? thinking.budgetTokens) : undefined;
+      const bt = Number(btRaw);
+      let v = "";
+      if (thinking) {
+        if (tType !== "enabled") v = "custom";
+        else if (bt === 1024) v = "low";
+        else if (bt === 2048) v = "medium";
+        else if (bt === 4096) v = "high";
+        else if (bt === 8192) v = "extra";
+        else v = "custom";
+      }
+      return { supported: true, value: v, hint: "Anthropic：写入 requestDefaults.thinking.budget_tokens（Low/Medium/High/Extra high）" };
+    }
+
+    return { supported: false, value: "", hint: "该类型不支持（可用 Defaults JSON 自定义）" };
+  }
+
   ns.renderApp = function renderApp({ cfg, summary, status, modal, dirty, sideCollapsed, endpointSearch, selfTest, officialTest, providerExpanded }) {
     const c = cfg && typeof cfg === "object" ? cfg : {};
     const s = summary && typeof summary === "object" ? summary : {};
@@ -265,44 +350,12 @@
     const stLogs = Array.isArray(st.logs) ? st.logs : [];
     const stReport = st.report && typeof st.report === "object" ? st.report : null;
 
-	    const ot = officialTest && typeof officialTest === "object" ? officialTest : {};
-	    const otRunning = ot.running === true;
-	    const otOk = ot.ok === true ? true : ot.ok === false ? false : null;
-	    const otText = normalizeStr(ot.text);
-	    const otTextShort = otText.length > 140 ? otText.slice(0, 140) + "…" : otText;
-	    const otBadge = otRunning
-	      ? `<span class="status-badge status-badge--warning">testing</span>`
-	      : otOk === true
-	        ? `<span class="status-badge status-badge--success">ok</span>`
-	        : otOk === false
-	          ? `<span class="status-badge status-badge--error">failed</span>`
-	          : "";
-	    const otTextHtml = otTextShort
-	      ? `<span class="text-muted text-mono text-xs inline-ellipsis"${otText !== otTextShort ? ` title="${escapeHtml(otText)}"` : ""}>${escapeHtml(otTextShort)}</span>`
-	      : "";
+    const otUi = computeOfficialTestUi(officialTest);
+    const otRunning = otUi.running;
+    const otBadge = otUi.badgeHtml;
+    const otTextHtml = otUi.textHtml;
 
-    const summarizeSelfTestReport = () => {
-      if (!stReport) return "";
-      const ps = Array.isArray(stReport.providers) ? stReport.providers : [];
-      const total = ps.length;
-      const failed = ps.filter((p) => p && p.ok === false).length;
-      const globals = stReport.global && typeof stReport.global === "object" ? stReport.global : {};
-      const gTests = Array.isArray(globals.tests) ? globals.tests : [];
-      const gFailed = gTests.filter((x) => x && x.ok === false).length;
-      const toolExec = globals.toolExec && typeof globals.toolExec === "object" ? globals.toolExec : null;
-      const toolExecBadge =
-        toolExec && toolExec.ok === true ? `<span class="badge">ok</span>` : toolExec && toolExec.ok === false ? `<span class="badge">failed</span>` : "";
-      const failedTools = toolExec && Array.isArray(toolExec.failedTools) ? toolExec.failedTools : [];
-      const failedToolsText = failedTools.length ? `${failedTools.join(",")}${toolExec && toolExec.failedToolsTruncated ? ",…" : ""}` : "";
-      const badge = stReport.ok === true ? `<span class="badge">ok</span>` : `<span class="badge">failed</span>`;
-      return (
-        `<div class="small">result: ${badge} providers_failed=${failed}/${total} global_failed=${gFailed}/${gTests.length}</div>` +
-        (toolExec
-          ? `<div class="small">toolsExec: ${toolExecBadge} ${escapeHtml(String(toolExec.detail || ""))}</div>`
-          : "") +
-        (failedToolsText ? `<div class="small mono">failed_tools: ${escapeHtml(failedToolsText)}</div>` : "")
-      );
-    };
+    const summarizeSelfTestReport = () => summarizeSelfTestReportHtml(stReport);
 
 	    const selfTestHtml = `
 	      <section class="settings-panel">
@@ -413,48 +466,7 @@
 	          const models = uniq(rawModels.filter((m) => normalizeStr(m)));
 	          const modelOptions = uniq(models.concat(dm ? [dm] : []));
 	          const requestDefaults = p?.requestDefaults && typeof p.requestDefaults === "object" && !Array.isArray(p.requestDefaults) ? p.requestDefaults : {};
-	          const thinkingUi = (() => {
-	            if (type === "openai_responses") {
-	              const uiThinkingLevel = normalizeStr(requestDefaults.__byok_thinking_level);
-	              const reasoning =
-	                requestDefaults.reasoning && typeof requestDefaults.reasoning === "object" && !Array.isArray(requestDefaults.reasoning) ? requestDefaults.reasoning : {};
-	              const raw = normalizeStr(reasoning.effort);
-	              const rawNorm = raw.replace(/[\s-]+/g, "_");
-	              const v =
-	                rawNorm === "extra_high"
-	                  ? "extra"
-	                  : rawNorm === "high" && uiThinkingLevel === "extra"
-	                  ? "extra"
-	                  : rawNorm === "low" || rawNorm === "medium" || rawNorm === "high"
-	                    ? rawNorm
-	                    : rawNorm
-	                      ? "custom"
-	                      : "";
-	              const hint =
-	                v === "extra"
-	                  ? "OpenAI Responses：reasoning.effort=extra_high（注意：Extra high 可能更快消耗速率/额度）"
-	                  : "OpenAI Responses：reasoning.effort=low|medium|high|extra_high";
-	              return { supported: true, value: v, hint };
-	            }
-	            if (type === "anthropic") {
-	              const thinking =
-	                requestDefaults.thinking && typeof requestDefaults.thinking === "object" && !Array.isArray(requestDefaults.thinking) ? requestDefaults.thinking : null;
-	              const tType = normalizeStr(thinking && thinking.type);
-	              const btRaw = thinking ? (thinking.budget_tokens ?? thinking.budgetTokens) : undefined;
-	              const bt = Number(btRaw);
-	              let v = "";
-	              if (thinking) {
-	                if (tType !== "enabled") v = "custom";
-	                else if (bt === 1024) v = "low";
-	                else if (bt === 2048) v = "medium";
-	                else if (bt === 4096) v = "high";
-	                else if (bt === 8192) v = "extra";
-	                else v = "custom";
-	              }
-	              return { supported: true, value: v, hint: "Anthropic：写入 requestDefaults.thinking.budget_tokens（Low/Medium/High/Extra high）" };
-	            }
-	            return { supported: false, value: "", hint: "该类型不支持（可用 Defaults JSON 自定义）" };
-	          })();
+	          const thinkingUi = computeThinkingUi({ type, requestDefaults });
 
 		          const providerTitle = pid || `provider_${idx + 1}`;
 		          const isExpanded = pKey in expanded ? expanded[pKey] === true : idx === 0;

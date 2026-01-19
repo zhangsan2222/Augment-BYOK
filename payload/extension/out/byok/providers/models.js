@@ -1,9 +1,28 @@
 "use strict";
 
+const { debug } = require("../infra/log");
+const { nowMs } = require("../infra/trace");
 const { normalizeString, requireString, normalizeRawToken } = require("../infra/util");
 const { joinBaseUrl } = require("./http");
 const { openAiAuthHeaders, anthropicAuthHeaders } = require("./headers");
 const { fetchWithRetry, makeUpstreamHttpError } = require("./request-util");
+
+function formatMs(ms) {
+  const n = Number(ms);
+  return Number.isFinite(n) && n >= 0 ? `${Math.floor(n)}ms` : "n/a";
+}
+
+function baseUrlForLog(baseUrl) {
+  const b = normalizeString(baseUrl);
+  if (!b) return "";
+  try {
+    const u = new URL(b);
+    const p = u.pathname.replace(/\/+$/, "");
+    return `${u.origin}${p}`;
+  } catch {
+    return b.replace(/\?.*$/, "").replace(/#.*$/, "");
+  }
+}
 
 function uniqKeepOrder(xs) {
   const out = [];
@@ -119,13 +138,26 @@ async function fetchProviderModels({ provider, timeoutMs, abortSignal }) {
   const baseUrl = normalizeString(provider.baseUrl);
   const apiKey = normalizeString(provider.apiKey);
   const extraHeaders = provider.headers && typeof provider.headers === "object" ? provider.headers : {};
+  const providerId = normalizeString(provider.id);
+  const label = `models type=${type || "?"}${providerId ? ` id=${providerId}` : ""}`;
 
   const t = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
-  if (type === "openai_compatible") return await fetchOpenAiCompatibleModels({ baseUrl, apiKey, extraHeaders, timeoutMs: t, abortSignal });
-  if (type === "openai_responses") return await fetchOpenAiCompatibleModels({ baseUrl, apiKey, extraHeaders, timeoutMs: t, abortSignal });
-  if (type === "anthropic") return await fetchAnthropicModels({ baseUrl, apiKey, extraHeaders, timeoutMs: t, abortSignal });
-  if (type === "gemini_ai_studio") return await fetchGeminiAiStudioModels({ baseUrl, apiKey, extraHeaders, timeoutMs: t, abortSignal });
-  throw new Error(`未知 provider.type: ${type}`);
+  const t0 = nowMs();
+  try {
+    let models = [];
+    if (type === "openai_compatible") models = await fetchOpenAiCompatibleModels({ baseUrl, apiKey, extraHeaders, timeoutMs: t, abortSignal });
+    else if (type === "openai_responses") models = await fetchOpenAiCompatibleModels({ baseUrl, apiKey, extraHeaders, timeoutMs: t, abortSignal });
+    else if (type === "anthropic") models = await fetchAnthropicModels({ baseUrl, apiKey, extraHeaders, timeoutMs: t, abortSignal });
+    else if (type === "gemini_ai_studio") models = await fetchGeminiAiStudioModels({ baseUrl, apiKey, extraHeaders, timeoutMs: t, abortSignal });
+    else throw new Error(`未知 provider.type: ${type}`);
+
+    debug(`[${label}] ok (${formatMs(nowMs() - t0)}) baseUrl=${baseUrlForLog(baseUrl)} models=${models.length}`);
+    return models;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    debug(`[${label}] FAIL (${formatMs(nowMs() - t0)}) baseUrl=${baseUrlForLog(baseUrl)}: ${msg}`);
+    throw err;
+  }
 }
 
 module.exports = { fetchProviderModels };

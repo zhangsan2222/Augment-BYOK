@@ -18,6 +18,7 @@ function redactText(v) {
   if (typeof v !== "string") return v;
   let s = v;
   s = s.replace(/\bBearer\s+[A-Za-z0-9._-]{8,}\b/gi, "Bearer ***");
+  s = s.replace(/([?&](?:key|api_key|api-key|access_token|refresh_token)=)[^&\s]+/gi, "$1***");
   s = s.replace(/\bace_[A-Za-z0-9]{16,}\b/g, "ace_***");
   s = s.replace(/\bsk-ant-[A-Za-z0-9_-]{16,}\b/g, "sk-ant-***");
   s = s.replace(/\bsk-[A-Za-z0-9]{16,}\b/g, "sk-***");
@@ -56,12 +57,16 @@ function shouldOmitKey(keyLower) {
 }
 
 function shouldRedactKey(keyLower) {
-  if (keyLower === "authorization") return true;
-  if (keyLower === "x-api-key") return true;
-  if (keyLower.endsWith("api_key") || keyLower.includes("api_key")) return true;
-  if (keyLower.endsWith("api_token") || keyLower.includes("api_token")) return true;
-  if (keyLower === "encrypted_data" || keyLower === "encrypteddata") return true;
-  if (keyLower === "iv") return true;
+  const k = String(keyLower || "").trim().toLowerCase();
+  const compact = k.replace(/[^a-z0-9]/g, "");
+  if (k === "authorization") return true;
+  if (k === "x-api-key") return true;
+  if (k === "api-key") return true;
+  if (k === "x-goog-api-key") return true;
+  if (compact.includes("apikey")) return true;
+  if (compact.includes("apitoken")) return true;
+  if (k === "encrypted_data" || k === "encrypteddata") return true;
+  if (k === "iv") return true;
   return false;
 }
 
